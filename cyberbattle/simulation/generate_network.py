@@ -3,11 +3,11 @@
 
 """ Generating random graphs"""
 from cyberbattle.simulation.model import Identifiers, NodeID, CredentialID, PortName, FirewallConfiguration, FirewallRule, RulePermission
-import numpy as np
+
 import networkx as nx
 from cyberbattle.simulation import model as m
 import random
-from typing import List, Optional, Tuple, DefaultDict
+from typing import List, Tuple, DefaultDict
 
 from collections import defaultdict
 
@@ -15,73 +15,22 @@ ENV_IDENTIFIERS = Identifiers(
     properties=[
         'breach_node'
     ],
-    ports=['SMB', 'HTTP', 'RDP'],
+
+    ports=['SMB', 'RDP', 'HTTP'],
+
     local_vulnerabilities=[
         'ScanWindowsCredentialManagerForRDP',
         'ScanWindowsExplorerRecentFiles',
-        'ScanWindowsCredentialManagerForSMB'
+        'ScanWindowsCredentialManagerForSMB',
+        'Knows_on_capture'  # DRL Added
+
     ],
+
     remote_vulnerabilities=[
-        'Traceroute'
-    ]
+        'Traceroute',
+    ],
+
 )
-
-
-def generate_random_traffic_network(
-    n_clients: int = 200,
-    n_servers={
-        "SMB": 1,
-        "HTTP": 1,
-        "RDP": 1,
-    },
-    seed: Optional[int] = 0,
-    tolerance: np.float32 = np.float32(1e-3),
-    alpha=np.array([(0.1, 0.3), (0.18, 0.09)], dtype=float),
-    beta=np.array([(100, 10), (10, 100)], dtype=float),
-) -> nx.DiGraph:
-    """
-    Randomly generate a directed multi-edge network graph representing
-    fictitious SMB, HTTP, and RDP traffic.
-
-    Arguments:
-        n_clients: number of workstation nodes that can initiate sessions with server nodes
-        n_servers: dictionary indicatin the numbers of each nodes listening to each protocol
-        seed: seed for the psuedo-random number generator
-        tolerance: absolute tolerance for bounding the edge probabilities in [tolerance, 1-tolerance]
-        alpha: beta distribution parameters alpha such that E(edge prob) = alpha / beta
-        beta: beta distribution parameters beta such that E(edge prob) = alpha / beta
-
-    Returns:
-        (nx.classes.multidigraph.MultiDiGraph): the randomly generated network from the hierarchical block model
-    """
-    edges_labels = defaultdict(set)  # set backed multidict
-
-    for protocol in list(n_servers.keys()):
-        sizes = [n_clients, n_servers[protocol]]
-        # sample edge probabilities from a beta distribution
-        np.random.seed(seed)
-        probs: np.ndarray = np.random.beta(a=alpha, b=beta, size=(2, 2))
-
-        # scale by edge type
-        if protocol == "SMB":
-            probs = 3 * probs
-        if protocol == "RDP":
-            probs = 4 * probs
-
-        # don't allow probs too close to zero or one
-        probs = np.clip(probs, a_min=tolerance, a_max=np.float32(1.0 - tolerance))
-
-        # sample edges using block models given edge probabilities
-        di_graph_for_protocol = nx.stochastic_block_model(
-            sizes=sizes, p=probs, directed=True, seed=seed)
-
-        for edge in di_graph_for_protocol.edges:
-            edges_labels[edge].add(protocol)
-
-    digraph = nx.DiGraph()
-    for (u, v), port in list(edges_labels.items()):
-        digraph.add_edge(u, v, protocol=port)
-    return digraph
 
 
 def cyberbattle_model_from_traffic_graph(
@@ -94,16 +43,12 @@ def cyberbattle_model_from_traffic_graph(
     probability_two_nodes_use_same_password_to_access_given_resource=0.8
 ) -> nx.DiGraph:
     """Generate a random CyberBattle network model from a specified traffic (directed multi) graph.
-
     The input graph can for instance be generated with `generate_random_traffic_network`.
     Each edge of the input graph indicates that a communication took place
     between the two nodes with the protocol specified in the edge label.
-
     Returns a CyberBattle network with the same nodes and implanted vulnerabilities
     to be used to instantiate a CyverBattleSim gym.
-
     Arguments:
-
     cached_smb_password_probability, cached_rdp_password_probability:
         probability that a password used for authenticated traffic was cached by the OS for SMB and RDP
     cached_accessed_network_shares_probability:
@@ -227,6 +172,20 @@ def cyberbattle_model_from_traffic_graph(
                 cost=5.0
             )
 
+        # DRL Added
+        knows_neighbors = traffic_targets(node_id, 'Knows_on_capture')
+
+        if len(knows_neighbors) > 0:
+            library['Knows_on_capture'] = m.VulnerabilityInfo(
+                description="Attempt to discover human employee associated with node",
+                type=m.VulnerabilityType.LOCAL,
+                outcome=m.LeakedGuyId([target_node for target_node in knows_neighbors]),
+
+                reward_string="Discovered new entity - Human",
+                cost=5.0
+            )
+        #
+
         return library
 
     def create_vulnerabilities_from_traffic_data(node_id: m.NodeID):
@@ -234,7 +193,14 @@ def cyberbattle_model_from_traffic_graph(
 
     firewall_conf = FirewallConfiguration(
         [FirewallRule("RDP", RulePermission.ALLOW), FirewallRule("SMB", RulePermission.ALLOW)],
+
         [FirewallRule("RDP", RulePermission.ALLOW), FirewallRule("SMB", RulePermission.ALLOW)])
+
+# DRL Added - Firewall Conf BLOCK ALL
+    firewall_conf_deny = FirewallConfiguration(
+        [FirewallRule("RDP", RulePermission.BLOCK), FirewallRule("SMB", RulePermission.BLOCK), FirewallRule("HTTP", RulePermission.BLOCK)],
+        [FirewallRule("RDP", RulePermission.BLOCK), FirewallRule("SMB", RulePermission.BLOCK), FirewallRule("HTTP", RulePermission.BLOCK)])
+#########
 
     # Pick a random node as the agent entry node
     entry_node_index = random.randrange(len(graph.nodes))
@@ -259,12 +225,37 @@ def cyberbattle_model_from_traffic_graph(
             agent_installed=False,
             firewall=firewall_conf
         )
+# DRL Added - Ugly, but adds Data without firewall to custom nodes
+
+    def create_node_data_two(node_id: m.NodeID):
+        return m.NodeInfo(
+            services=[m.ListeningService(name=port, allowedCredentials=assigned_passwords[(target_node, port)])
+                      for (target_node, port) in assigned_passwords.keys()
+                      if target_node == node_id
+                      ],
+            value=random.randint(0, 100),
+            vulnerabilities=create_vulnerabilities_from_traffic_data(node_id),
+            agent_installed=False,
+            firewall=firewall_conf_deny
+        )
+
+    j: int = 0
 
     # Step 1: Create all the nodes with associated services and firewall configuration
     for node in list(graph.nodes):
-        if node != entry_node_id:
-            graph.nodes[node].clear()
-            graph.nodes[node].update({'data': create_node_data_without_vulnerabilities(node)})
+
+        if j < 15:
+            if node != entry_node_id:
+
+                graph.nodes[node].clear()
+                graph.nodes[node].update({'data': create_node_data_without_vulnerabilities(node)})
+        # DRL Added - Ugly coding continues here, adding data to new nodes
+        else:
+            if node != entry_node_id:
+                graph.nodes[node].clear()
+                graph.nodes[node].update({'data': create_node_data_two(node)})
+
+        j += 1
 
     # Step 2: Assign vulnerabilities to each node.
     # This must be a separate step because vulnerabilities definitions
@@ -284,20 +275,94 @@ def cyberbattle_model_from_traffic_graph(
 def new_environment(n_servers_per_protocol: int):
     """Create a new simulation environment based on
     a randomly generated network topology.
-
     NOTE: the probabilities and parameter values used
     here for the statistical generative model
     were arbirarily picked. We recommend exploring different values for those parameters.
     """
-    traffic = generate_random_traffic_network(seed=None,
-                                              n_clients=50,
-                                              n_servers={
-                                                  "SMB": n_servers_per_protocol,
-                                                  "HTTP": n_servers_per_protocol,
-                                                  "RDP": n_servers_per_protocol,
-                                              },
-                                              alpha=np.array([(1, 1), (0.2, 0.5)], dtype=float),
-                                              beta=np.array([(1000, 10), (10, 100)], dtype=float))
+
+
+# DRL - Nothing should break here, follows format {Create graph, add vuln edges to DefaultDict, (repeat for vuln), create nx model}
+    protocols = ['HTTP', 'SMB', 'RDP']
+
+    edges_labels = defaultdict(set)
+
+    for protocol in protocols:
+
+        h = nx.fast_gnp_random_graph(15,
+                                     0.5,
+                                     seed=None,
+                                     directed=True
+                                     )
+        for edge in h.edges:
+
+            edges_labels[edge].add(protocol)
+
+# Create graph with no connections except new nodes
+    h1 = nx.fast_gnp_random_graph(15,
+                                  0,
+                                  seed=1,
+                                  directed=True
+                                  )
+    i: int = 0
+    num_players: int = 3
+
+    node_list = random.sample(h1.nodes, num_players)
+
+    for comp_nodes in node_list:
+
+        next_node: int = 15 + i
+        last_node: int = 15 + len(node_list) + i
+
+        h1.add_node(next_node)
+        h1.add_node(last_node)
+
+        # Add pivot
+        h1.add_edge(comp_nodes, next_node)
+        edges_labels[(comp_nodes, next_node)].add('Knows_on_capture')
+
+        h1.add_edge(next_node, last_node)
+        edges_labels[(next_node, last_node)].add('Test')
+
+        i += 1
+
+    print("[!] Printing Edges Labels: {}".format(edges_labels))
+    traffic = nx.DiGraph()
+
+    for (u, v), port in list(edges_labels.items()):
+
+        traffic.add_edge(u,
+                         v,
+                         protocol=port)
+
+    colour_map = []
+
+    for (u, v), proto in list(edges_labels.items()):
+
+        if len(proto) == 1 and 'HTTP' in proto:
+            col = 'blue'
+        elif len(proto) == 1 and 'RDP' in proto:
+            col = 'red'
+        elif len(proto) == 1 and 'SMB' in proto:
+            col = 'green'
+        elif 'VPN' in proto:
+            col = 'pink'
+        elif 'Bad' in proto:
+            col = 'orange'
+        elif len(proto) == 2:
+            col = 'purple'
+        else:
+            col = 'black'
+
+        colour_map.append(col)
+
+    nx.draw_networkx(traffic,
+                     edge_color=colour_map,
+                     node_size=15200,
+                     arrowstyle='->',
+                     arrowsize=80,
+                     font_size=40,
+                     font_weight="bold",
+                     )
 
     network = cyberbattle_model_from_traffic_graph(
         traffic,
@@ -306,6 +371,7 @@ def new_environment(n_servers_per_protocol: int):
         cached_accessed_network_shares_probability=0.8,
         cached_password_has_changed_probability=0.01,
         probability_two_nodes_use_same_password_to_access_given_resource=0.9)
+
     return m.Environment(network=network,
                          vulnerability_library=dict([]),
                          identifiers=ENV_IDENTIFIERS)

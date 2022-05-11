@@ -842,6 +842,20 @@ class CyberBattleEnv(gym.Env):
                               self.__portname_to_index(cached_credential.port)], numpy.int32)
                  for cache_index, cached_credential in newly_discovered_creds])
 
+
+# DRL Added
+
+        elif isinstance(outcome, model.LeakedGuyId):
+            # update discovered nodes
+            newly_discovered_nodes_count = 0
+            for node in outcome.nodes:
+                if node not in self.__discovered_nodes:
+                    self.__discovered_nodes.append(node)
+                    newly_discovered_nodes_count += 1
+
+            obs['newly_discovered_nodes_count'] = numpy.int32(newly_discovered_nodes_count)
+##########
+
         elif isinstance(outcome, model.LateralMove):
             obs['lateral_move'] = numpy.int32(1)
         elif isinstance(outcome, model.CustomerData):
