@@ -7,7 +7,7 @@ from cyberbattle.simulation.model import Identifiers, NodeID, CredentialID, Port
 import networkx as nx
 from cyberbattle.simulation import model as m
 import random
-from typing import List, Tuple, DefaultDict
+from typing import List, Optional, Tuple, DefaultDict
 
 from collections import defaultdict
 
