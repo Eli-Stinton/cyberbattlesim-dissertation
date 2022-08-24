@@ -1141,3 +1141,4 @@ class CyberBattleEnv(gym.Env):
 
     def close(self) -> None:
         return None
+
