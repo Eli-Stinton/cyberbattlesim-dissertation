@@ -28,57 +28,72 @@ from cyberbattle.simulation.actions import DefenderAgentActions
 import numpy as np
 from cyberbattle.simulation.model import Environment
 
+
 def random_argmax(array):
     """Just like `argmax` but if there are multiple elements with the max
     return a random index instead of returning the first one.
-    
+
     :param array: Numpy array or array-like object.
     """
 
     max_value = np.max(array)
     max_index = np.where(array == max_value)[0]
 
-    if max_index.shape[0] > 1: # Check if there exist multiple elements with the max.
+    if max_index.shape[0] > 1:  # Check if there exist multiple elements with the max.
         max_index = int(np.random.choice(max_index, size=1))
     else:
         max_index = int(max_index)
 
     return max_value, max_index
 
+def node_ids(environment: Environment) -> List:
+    """
+    Return nodeIDs for nodes in network.
+
+    """
+    
+    nodes = []
+
+    node_generator = environment.nodes()
+    for nodeid, node_data in node_generator:
+        nodes.append(nodeid)
+    
+    return nodes
+
+
 class Feature_reimaged_nodeproperties:
     """
-    Feature that is a bitmask indicating node properties present in `nodes` (`nodes` should be
-    the last few reimaged nodes).
+    Feature that is a bitmask indicating node properties present in nodes that have been reimaged.
 
-    :param nodes: List of node IDs.
-    :param environment: `Environment` to access nodes from.
-
-    TODO:
-    - assert `nodes` list is only a fixed chosen length (3)
     """
+    def __init__(self, environment: Environment):
+        # Initially set all nodes to 0 i.e. have not been reimaged
+        keys = node_ids(environment)
+        values = [0] * len(keys)
+        self.nodes_reimaged = dict(zip(keys, values))
 
-    def get_feature_nodes_at(self, environment: Environment, defender_actuator: DefenderAgentActions) -> List:
-        """ 
-        Obtain NodeIDs of last 3 nodes reimaged (i.e. last 3 nodes malware was detected
-        on).
-        
+    def get_reimaged_nodes_at(self, environment: Environment, defender_actuator: DefenderAgentActions) -> List:
         """
-        reimaging_node_ids = []
+        Obtain bitmask of nodes that have been reimaged (i.e. nodes malware was detected
+        on).
 
-        for node_id in defender_actuator.node_reimaging_progress:
-            reimaging_node_ids.append(node_id)
+        """
+        bitmask = list(self.nodes_reimaged.values())
 
-        # Take the last 3 
-        # ACCOUNTING FOR FIRST STEP WHERE NO NODES HAVE BEEN REIMAGED
-        # But might not have 3 last reimaged notes even after first step in the dict
-        # Can't just take whatever is in the dict or history of reimaing (capped) because
-        #   that would mean the state_space would be variable? Way to make it not?
+        return bitmask
+
+
+        # Handling variable-length state_space: bitmask (nvec: [2] * node_count) indicating nodes
+        # that have been reimaged. 
 
         # step uses actions (DefenderAgentActions) - actions.reimage_node(node_id)
         # DefenderAgentActions has attribute: self.node_reimaging_progress: Dict[model.NodeID, int] = dict()
-        #       can retrieve last 3 nodes being reimaged (pad if there aren't 3?)
-        # Then need to pass in DefenderAgentActions
-        pass
+        #       that is updated when reimage_node() is called, so update a tracker for reimaged
+        #       nodes when it is called?
+        #       Tracker would be a dict: Dict[model.NodeID, int], where int = [0,1] and of size 
+        #       node_count.
+        #       TODO: WOULD NEED TO UPDATE TRACKER ON ON_STEP!!
+
 
     def feature_vector_at(self, environment: Environment, nodes: List) -> np.ndarray:
         """
@@ -90,7 +105,7 @@ class Feature_reimaged_nodeproperties:
         # Remap to get rid of unknown value 0: 1 -> 1, and -1 -> 0 (and 0-> 0)
         node_prop_remapped = np.int32((1 + node_prop) / 2)
 
-        countby_col = np.sum(node_prop_remapped, axis = 0)
+        countby_col = np.sum(node_prop_remapped, axis=0)
 
         # Map non-zero elements to 1
         bitmask = (countby_col > 0) * 1
@@ -113,7 +128,7 @@ class Feature_reimaged_nodeproperties:
         TODO:
         - assert len(feature_vector) is of length property_count. Chain environment this
             code will be tested on has only 3 properties per node. In this case, dim_size
-            would then be [2,2,2], where - for each property - there are two options: 
+            would then be [2,2,2], where - for each property - there are two options:
                 1. present (1), or
                 2. not present (0)
             in the last few reimaged nodes.
@@ -125,26 +140,28 @@ class Feature_reimaged_nodeproperties:
 
     def flat_size(self):
         """
-        TODO: 
+        TODO:
         - add dim_size as class attribute. dim_size is currently defined separately in
             both ravel_encode_feature_vector and flat_size.
         """
         dim_size = [2] * 3
         return np.prod(dim_size)
 
+
 class Feature_nodes_in_network:
     """
     Feature that is the node IDs in the network. (Note: encoding is unnecessary for this
     feature).
     """
-    
+
     def feature_vector_at(self, environment: Environment) -> List:
+        # TODO: UPDATE WITH NEWLY CREATED FUNC THAT IMPLEMENTS SAME FUNCTIONALITY
         nodes = []
 
         node_generator = environment.nodes()
         for nodeid, node_data in node_generator:
             nodes.append(nodeid)
-        
+
         return nodes
 
     def flat_size(self):
@@ -175,6 +192,7 @@ l = len(a)
 l
 """
 
+
 class QMatrixReimage:
 
     qm: np.ndarray
@@ -200,7 +218,7 @@ class QMatrixReimage:
     def update(self, current_state: int, action: int, next_state: int, reward, gamma, learning_rate):
         """Update the Q Matrix after taking 'action' in 'current_state'."""
 
-        maxq_atnext, max_index = random_argmax(self.qm[next_state, ]) # select row in Q Matrix corresponding with `next_state`
+        maxq_atnext, max_index = random_argmax(self.qm[next_state, ])  # select row in Q Matrix corresponding with `next_state`
 
         # Bellman equation for Q-learning
         temporal_difference = reward + gamma * maxq_atnext - self.qm[current_state, action]
@@ -216,6 +234,7 @@ class QMatrixReimage:
         """Exploit the Q-Matrix"""
         expected_q, action = random_argmax(self.qm[state, ])
         return action, expected_q
+
 
 class LossEval:
     """Loss evaluation for a Q-Learner,
@@ -241,30 +260,28 @@ class LossEval:
         self.all_episodes.append(self.current_episode_loss())
 
 
-
 class DefenderQTabularLearner:
     """" doc string"""
 
     def __init__(self, gamma: float,
-                learning_rate: float,
-                trained = None):
-        
+                 learning_rate: float,
+                 trained=None):
+
         if trained:
-            self.qm = trained.qm # Not QMatrixRimage(qm)?
+            self.qm = trained.qm  # Not QMatrixRimage(qm)?
         else:
             self.qm = QMatrixReimage(Feature_reimaged_nodeproperties, Feature_nodes_in_network)
 
         self.qm = LossEval(self.qm)
         self.gamma = gamma
         self.learning_rate = learning_rate
-    
-    
+
     def on_step(self, environment: Environment, observation, reward, done, info, action_metadata):
         """ Pass `Environment` into this function - like it's passed to the original Defender step()"""
         # Probably need ChosenActionMetadata but adjusted - what adjustments needed?
 
         # Relationship between model and environment: model.Environment
-        # Wherever agenttabularqlearning.py is encoding, its using the 
+        # Wherever agenttabularqlearning.py is encoding, its using the
         # ecoding function in the FeatureEncoder class
         # Therefore, functions needed for first step:
         # - Retrieve observation (this is amounts to just passing in the full environment)
@@ -276,30 +293,30 @@ class DefenderQTabularLearner:
         feature_vector = self.qm.state_space.feature_vector_at(environment, nodes)
         next_state = self.qm.state_space.ravel_encode_feature_vector(feature_vector)
 
-        self.qm.update(current_state, # current_state from action_metadata
-                    action, # action from action_metadata - index on Q Matrix
-                    next_state, 
-                    reward, # reward is passed in, what is it?
-                    self.gamma, 
-                    self.learning_rate)
+        self.qm.update(current_state,  # current_state from action_metadata
+                       action,  # action from action_metadata - index on Q Matrix
+                       next_state,
+                       reward,  # reward is passed in, what is it?
+                       self.gamma,
+                       self.learning_rate)
 
         # 1. Encode the observation to return next_state index in Q Matrix
-                # e.g Feature.encode(Environment, nodeIDs)
-                # Therefore, nodeIDS needs to be passed in - action_metadata or observation?
+        # e.g Feature.encode(Environment, nodeIDs)
+        # Therefore, nodeIDS needs to be passed in - action_metadata or observation?
         # 2. Update the Q Matrix to reflect changes made by last step
         # 3. Return nothing
         pass
-    
+
     def exploit(self, observation):
 
         # 1. Encode the observation to current_state index in Q Matrix
-        # 2. Exploit Q Matrix using 1. 
+        # 2. Exploit Q Matrix using 1.
         # 3. Return action_metadata and gym_action
         pass
 
     def explore(self):
-        
+
         # 1. Sample a valid Defender action
-        # 2. Return the gym action and ChosenActionMetadata (i.e. return 
+        # 2. Return the gym action and ChosenActionMetadata (i.e. return
         #       same returns as exploit)
         pass
