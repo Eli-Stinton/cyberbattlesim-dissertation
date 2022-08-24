@@ -46,18 +46,19 @@ def random_argmax(array):
 
     return max_value, max_index
 
+
 def node_ids(environment: Environment) -> List:
     """
     Return nodeIDs for nodes in network.
 
     """
-    
+
     nodes = []
 
     node_generator = environment.nodes()
     for nodeid, node_data in node_generator:
         nodes.append(nodeid)
-    
+
     return nodes
 
 
@@ -66,6 +67,7 @@ class Feature_reimaged_nodeproperties:
     Feature that is a bitmask indicating node properties present in nodes that have been reimaged.
 
     """
+
     def __init__(self, environment: Environment):
         # Initially set all nodes to 0 i.e. have not been reimaged
         keys = node_ids(environment)
@@ -82,20 +84,16 @@ class Feature_reimaged_nodeproperties:
 
         return bitmask
 
-
         # Handling variable-length state_space: bitmask (nvec: [2] * node_count) indicating nodes
-        # that have been reimaged. 
+        # that have been reimaged.
 
         # step uses actions (DefenderAgentActions) - actions.reimage_node(node_id)
         # DefenderAgentActions has attribute: self.node_reimaging_progress: Dict[model.NodeID, int] = dict()
         #       that is updated when reimage_node() is called, so update a tracker for reimaged
         #       nodes when it is called?
-        #       Tracker would be a dict: Dict[model.NodeID, int], where int = [0,1] and of size 
+        #       Tracker would be a dict: Dict[model.NodeID, int], where int = [0,1] and of size
         #       node_count.
         #       TODO: WOULD NEED TO UPDATE TRACKER ON ON_STEP!!
-
-
-
 
     def ravel_encode_feature_vector(self, feature_vector) -> int:
         """
